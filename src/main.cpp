@@ -272,7 +272,7 @@ void transfer_can2tty()
   String command = "";
   long time_now = 0;
   // receive next CAN frame from queue
-  if (twai_receive(&rx_frame, pdMS_TO_TICKS(10000)) == ESP_OK)
+  if (twai_receive(&rx_frame, 0) == ESP_OK)
   {
     // do stuff!
     if (working)
@@ -280,12 +280,15 @@ void transfer_can2tty()
       digitalWrite(BLUE_LED, HIGH);
       if (rx_frame.extd)
       {
+        // Message is extended
         if (rx_frame.rtr)
         {
+          // Message is Remote Transmission Request
           command = command + "R";
         }
         else
         {
+          // Message is Data Frame
           command = command + "T";
         }
         command = command + char(hexval[(rx_frame.identifier >> 28) & 1]);
@@ -300,12 +303,15 @@ void transfer_can2tty()
       }
       else
       {
+        // Message is standard
         if (rx_frame.rtr)
         {
+          // Message is Remote Transmission Request
           command = command + "r";
         }
         else
         {
+          // Message is Data Frame
           command = command + "t";
         }
         command = command + char(hexval[(rx_frame.identifier >> 8) & 15]);
