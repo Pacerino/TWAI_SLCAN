@@ -1,7 +1,5 @@
 #include "pins.h"
 #include "driver/twai.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
 #include "Arduino.h"
 
 // CURRENTLY ESP32 Dev Module Board Definition
@@ -20,8 +18,8 @@ bool timestamp = false;
 static uint8_t hexval[17] = "0123456789ABCDEF";
 
 #define BAUDRATE 500000
+//#define DEBUG
 
-QueueHandle_t rx_queue;         // Recieve Queue
 QueueHandle_t tx_queue;         // Sender Queue
 twai_timing_config_t t_config;  // CAN Speed Config
 twai_general_config_t g_config; // TWAI General Config
@@ -31,7 +29,7 @@ twai_filter_config_t f_config;  // TWAI Filter COnfig
 
 void slcan_ack()
 {
-  Serial.write('\r');
+  Serial.write('\r'); // CR
 } // slcan_ack()
 
 //----------------------------------------------------------------
@@ -48,52 +46,75 @@ void pars_slcancmd(char *buf)
   switch (buf[0])
   {
   case 'O': // Open CAN channel
-    if (!working && twai_driver_install(&g_config, &t_config, &f_config) == ESP_OK) // Check if already working and install TWAI driver
+    if (!working)
     {
-      if (twai_start() != ESP_OK) // Start TWAI driver
+      if (twai_driver_install(&g_config, &t_config, &f_config) == ESP_OK) // Check if already working and install TWAI driver
       {
-        slcan_ack();
+        if (twai_start() != ESP_OK) // Start TWAI driver
+        {
+          slcan_nack();
+          digitalWrite(YELLOW_LED, HIGH);
+#ifdef DEBUG
+          Serial.println("twai_start() failed");
+#endif
+        }
+        else
+        {
+          // Install and start successfull
+          working = true;
+          slcan_ack();
+          digitalWrite(BLUE_LED, HIGH);
+          delay(100);
+          digitalWrite(BLUE_LED, LOW);
+        }
       }
       else
-      {
-        // Install and start successfull
-        working = true;
-        slcan_ack();
-        digitalWrite(YELLOW_LED, HIGH);
-        delay(100);
-        digitalWrite(YELLOW_LED, LOW);
-      }
-    }
-    else
-    {
-      slcan_nack();
-    }
-    break;
-  case 'C': // Close CAN channel
-    if (working && twai_stop() != ESP_OK) // Check if already working and stop TWAI driver
-    {
-      slcan_ack();
-    }
-    else
-    {
-      if (twai_driver_uninstall() != ESP_OK) // Uninstall TWAI driver
       {
         slcan_nack();
+        digitalWrite(YELLOW_LED, HIGH);
+#ifdef DEBUG
+        Serial.println("twai_driver_install() failed");
+#endif
+      }
+    }
+    break;
+  case 'C':      // Close CAN channel
+    if (working) // check if working
+    {
+      if (twai_stop() != ESP_OK) // stop TWAI driver
+      {
+        slcan_nack();
+        digitalWrite(YELLOW_LED, HIGH);
+#ifdef DEBUG
+        Serial.println("twai_stop() failed");
+#endif
       }
       else
       {
-        // Stop and uninstall successfull
-        working = false;
-        slcan_ack();
-        digitalWrite(YELLOW_LED, HIGH);
-        delay(100);
-        digitalWrite(YELLOW_LED, LOW);
-        delay(100);
-        digitalWrite(YELLOW_LED, HIGH);
-        delay(100);
-        digitalWrite(YELLOW_LED, LOW);
+        if (twai_driver_uninstall() != ESP_OK) // Uninstall TWAI driver
+        {
+          slcan_nack();
+          digitalWrite(YELLOW_LED, HIGH);
+#ifdef DEBUG
+          Serial.println("twai_driver_uninstall() failed");
+#endif
+        }
+        else
+        {
+          // Stop and uninstall successfull
+          working = false;
+          slcan_ack();
+          digitalWrite(BLUE_LED, HIGH);
+          delay(100);
+          digitalWrite(BLUE_LED, LOW);
+          delay(100);
+          digitalWrite(BLUE_LED, HIGH);
+          delay(100);
+          digitalWrite(BLUE_LED, LOW);
+        }
       }
     }
+
     break;
   case 't': // SEND STD FRAME
     // send_canmsg(buf, false, false);
@@ -134,6 +155,9 @@ void pars_slcancmd(char *buf)
     break;
   case 's': // CUSTOM CAN bit-rate
     slcan_nack();
+#ifdef DEBUG
+    Serial.println("Custom CAN bit-rate not supported");
+#endif
     break;
   case 'S': // CAN bit-rate
     if (working)
@@ -182,6 +206,10 @@ void pars_slcancmd(char *buf)
         break;
       default:
         slcan_nack();
+        digitalWrite(YELLOW_LED, HIGH);
+#ifdef DEBUG
+        Serial.println("Invalid CAN bit-rate");
+#endif
         break;
       }
     }
@@ -200,6 +228,10 @@ void pars_slcancmd(char *buf)
     break;
   default:
     slcan_nack();
+    digitalWrite(YELLOW_LED, HIGH);
+#ifdef DEBUG
+    Serial.println("Invalid command");
+#endif
     break;
   }
 } // pars_slcancmd()
@@ -213,7 +245,6 @@ void transfer_tty2can()
   static int cmdidx = 0;
   if ((ser_length = Serial.available()) > 0)
   {
-    digitalWrite(YELLOW_LED, HIGH);
     for (int i = 0; i < ser_length; i++)
     {
       char val = Serial.read();
@@ -230,7 +261,6 @@ void transfer_tty2can()
         cmdidx = 0;
       }
     }
-    digitalWrite(YELLOW_LED, LOW);
   }
 } // transfer_tty2can()
 
@@ -242,7 +272,7 @@ void transfer_can2tty()
   String command = "";
   long time_now = 0;
   // receive next CAN frame from queue
-  if (xQueueReceive(rx_queue, &rx_frame, 3 * portTICK_PERIOD_MS) == pdTRUE)
+  if (twai_receive(&rx_frame, pdMS_TO_TICKS(10000)) == ESP_OK)
   {
     // do stuff!
     if (working)
@@ -318,7 +348,6 @@ void setup()
 
   g_config = TWAI_GENERAL_CONFIG_DEFAULT((gpio_num_t)CAN_TX, (gpio_num_t)CAN_RX, TWAI_MODE_LISTEN_ONLY);
   f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
-  rx_queue = xQueueCreate(10, sizeof(twai_message_t));
   delay(2000);
 } // setup()
 
